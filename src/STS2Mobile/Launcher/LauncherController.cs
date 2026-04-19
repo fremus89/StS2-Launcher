@@ -30,9 +30,15 @@ public class LauncherController
     {
         _model.SessionStateChanged += s => _runOnMainThread(() => UpdateUI(s));
         _model.LogReceived += msg => _runOnMainThread(() => _view.AppendLog(msg));
+
+        foreach (var msg in PatchHelper.ReplayBufferedLogs())
+        {
+            if (ShouldSurfaceToLauncher(msg))
+                _view.AppendLog(msg);
+        }
         PatchHelper.LogEmitted += msg =>
         {
-            if (msg.StartsWith("[Cloud]"))
+            if (ShouldSurfaceToLauncher(msg))
                 _runOnMainThread(() => _view.AppendLog(msg));
         };
         _model.CodeNeeded += wasIncorrect =>
@@ -400,4 +406,10 @@ public class LauncherController
     }
 
     private void OnLaunchPressed() => _model.Launch();
+
+    // Patch-helper logs the launcher panel cares about: the cloud sync trail
+    // plus any patch failures ("FAILED ...") so silent Harmony skips don't go
+    // unnoticed. Everything else stays in stderr/logcat.
+    private static bool ShouldSurfaceToLauncher(string msg) =>
+        msg.StartsWith("[Cloud]") || msg.StartsWith("FAILED ");
 }
