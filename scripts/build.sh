@@ -2,9 +2,14 @@
 set -euo pipefail
 
 NO_BUMP=false
-if [[ "${1:-}" == "--no-bump" ]]; then
-    NO_BUMP=true
-fi
+SKIP_DOCTOR=false
+for arg in "$@"; do
+    case "$arg" in
+        --no-bump)     NO_BUMP=true ;;
+        --skip-doctor) SKIP_DOCTOR=true ;;
+        *) echo "unknown argument: $arg" >&2; exit 2 ;;
+    esac
+done
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PATCHER_DIR="$ROOT/src/STS2Mobile"
@@ -12,9 +17,24 @@ BUILD_DIR="$ROOT/android"
 GRADLE_PROPS="$BUILD_DIR/gradle.properties"
 APK_DIR="$BUILD_DIR/build/outputs/apk/mono/release"
 
+# 0. Preflight (populates CRYPTO_SO_PATH, CSHARPIER_BIN, NDK_*)
+if [ "$SKIP_DOCTOR" = false ]; then
+    # shellcheck disable=SC1091
+    source "$ROOT/scripts/doctor.sh"
+    if [ "${FAILED:-0}" -gt 0 ]; then
+        echo "ERROR: preflight failed. Fix items above or re-run with --skip-doctor (not recommended)." >&2
+        exit 1
+    fi
+fi
+
 # 1. Format
 echo "Formatting C# code..."
-~/.dotnet/tools/csharpier format "$PATCHER_DIR"
+CSHARPIER="${CSHARPIER_BIN:-$(command -v csharpier || echo "$HOME/.dotnet/tools/csharpier")}"
+if [ ! -x "$CSHARPIER" ] && ! command -v "$CSHARPIER" >/dev/null 2>&1; then
+    echo "ERROR: csharpier not found. Run: dotnet tool install -g csharpier" >&2
+    exit 1
+fi
+"$CSHARPIER" format "$PATCHER_DIR"
 
 # 2. Build patcher
 echo "Building patcher..."
@@ -25,16 +45,36 @@ PUBLISH_DIR="$PATCHER_DIR/bin/Release/net9.0/publish"
 BCL_DIR="$BUILD_DIR/assets/dotnet_bcl"
 mkdir -p "$BCL_DIR"
 
-cp "$PUBLISH_DIR"/STS2Mobile.dll "$PUBLISH_DIR"/SteamKit2.dll \
-   "$PUBLISH_DIR"/protobuf-net.dll "$PUBLISH_DIR"/protobuf-net.Core.dll \
-   "$PUBLISH_DIR"/System.IO.Hashing.dll "$PUBLISH_DIR"/ZstdSharp.dll \
-   "$BCL_DIR/"
+copy_or_die() {
+    local src="$1"
+    local dst="$2"
+    local hint="$3"
+    if [ ! -f "$src" ]; then
+        echo "ERROR: missing $src" >&2
+        echo "       $hint" >&2
+        exit 1
+    fi
+    cp "$src" "$dst"
+}
 
-cp "$ROOT/upstream/godot-export/.godot/mono/publish/arm64/GodotSharp.dll" "$BCL_DIR/"
+for dll in STS2Mobile.dll SteamKit2.dll protobuf-net.dll protobuf-net.Core.dll \
+           System.IO.Hashing.dll ZstdSharp.dll; do
+    copy_or_die "$PUBLISH_DIR/$dll" "$BCL_DIR/" \
+        "re-run 'dotnet publish -c Release' in $PATCHER_DIR"
+done
 
-CRYPTO_SO="$HOME/.nuget/packages/microsoft.netcore.app.runtime.mono.android-arm64/9.0.7/runtimes/android-arm64/native/libSystem.Security.Cryptography.Native.Android.so"
-if [ -f "$CRYPTO_SO" ]; then
-    cp "$CRYPTO_SO" "$BUILD_DIR/libs/release/arm64-v8a/"
+copy_or_die "$ROOT/upstream/godot-export/.godot/mono/publish/arm64/GodotSharp.dll" "$BCL_DIR/" \
+    "export the desktop game to upstream/godot-export/"
+
+# TLS native lib for SteamKit2 over HTTPS. Fatal if missing - runtime will
+# fail obscurely inside SSL handshake.
+mkdir -p "$BUILD_DIR/libs/release/arm64-v8a"
+if [ -n "${CRYPTO_SO_PATH:-}" ] && [ -f "$CRYPTO_SO_PATH" ]; then
+    cp "$CRYPTO_SO_PATH" "$BUILD_DIR/libs/release/arm64-v8a/"
+else
+    echo "ERROR: libSystem.Security.Cryptography.Native.Android.so not resolved." >&2
+    echo "       Run scripts/doctor.sh to diagnose, or run 'dotnet publish' first." >&2
+    exit 1
 fi
 
 echo "Copied patcher + dependencies to android assets"
