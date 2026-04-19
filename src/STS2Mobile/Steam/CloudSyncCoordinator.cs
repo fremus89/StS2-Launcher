@@ -361,7 +361,9 @@ public static class CloudSyncCoordinator
             var canonPath = path.Replace("user://", "").Replace("\\", "/");
             var safeName = string.Concat(
                 Path.GetFileName(canonPath)
-                    .Select(c => char.IsLetterOrDigit(c) || c == '.' || c == '_' || c == '-' ? c : '_')
+                    .Select(c =>
+                        char.IsLetterOrDigit(c) || c == '.' || c == '_' || c == '-' ? c : '_'
+                    )
             );
             if (safeName.Length == 0)
                 safeName = "save";
@@ -377,7 +379,14 @@ public static class CloudSyncCoordinator
                 .Skip(MaxInternalConflictsPerFile);
             foreach (var old in survivors)
             {
-                try { old.Delete(); } catch { /* best-effort */ }
+                try
+                {
+                    old.Delete();
+                }
+                catch
+                {
+                    // best-effort cleanup of the ring; ignore I/O races
+                }
             }
         }
         catch (Exception ex)
