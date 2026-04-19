@@ -59,13 +59,37 @@ csharpier format src/STS2Mobile
 
 Shell scripts should pass `shellcheck`. CI runs it on `scripts/*.sh` and `src/stubs/*.sh`.
 
+## Tests
+
+Pure-C# logic lives in `src/STS2Mobile.Tests/` (xunit). The test project uses `<Compile Include>` to link specific sources from `src/STS2Mobile/` rather than taking a `<ProjectReference>`, so it compiles without `sts2.dll`, `GodotSharp.dll`, or `0Harmony.dll`. To cover a new source file:
+
+1. Add `<Compile Include="..\STS2Mobile\<path>\<file>.cs" Link="Linked/<file>.cs" />` in `STS2Mobile.Tests.csproj`.
+2. If the production file references sts2/Godot types the test doesn't exercise, either stub them inline (see `PatchHelperStub.cs` for the pattern) or refactor the production file to isolate the testable surface (e.g. `BeaconMessage` was extracted from `LanMultiplayerPatcher.cs`).
+3. Run locally with `dotnet test src/STS2Mobile.Tests/STS2Mobile.Tests.csproj`.
+
+CI runs the same command on every PR.
+
 ## Pull requests
 
 - Branch off `main`.
 - Keep changes focused; one concern per PR.
 - Describe the user-visible effect in the PR body.
-- CI must be green before review (formatting, shellcheck, native stubs build).
-- The full APK build cannot run in CI because it needs proprietary artifacts; verify locally with `bash scripts/build.sh` and mention any APK testing you did.
+- CI must be green before review (formatting, shellcheck, unit tests, native stubs build).
+- Every push to `main` and every `v*.*.*` tag triggers `apk-build.yml` on the self-hosted runner; the signed APK appears as a run artifact for smoke-checking.
+- Tags cut a **draft** GitHub Release via `release.yml` — the maintainer reviews and publishes.
+
+## Releases
+
+Cutting `v0.3.1`:
+1. Bump `export_version_name` and `export_version_code` in `android/gradle.properties` on a PR, update `CHANGELOG.md` with a new `## 0.3.1` section, merge.
+2. Tag the merge commit: `git tag v0.3.1 && git push origin v0.3.1`.
+3. `apk-build.yml` builds and signs the APK on the self-hosted runner; `release.yml` drafts the GitHub Release with the CHANGELOG 0.3.1 section as body and the APK + SHA-256 attached. Both run in parallel; the release workflow polls the APK build's run and attaches once it completes.
+4. Open the draft in the Releases tab, review, click **Publish**.
+
+## Infrastructure
+
+- **Self-hosted runner** — setup, artifact layout, signing key management, operational runbook all in [`docs/self-hosted-runner.md`](docs/self-hosted-runner.md). One Linux host; `sts2` label.
+- **Renovate** — weekly dependency PRs (Monday mornings UTC). Patch + minor bumps for `xunit*`, `Microsoft.NET.Test.Sdk`, and GitHub Actions auto-merge after CI green. Production .NET deps (`SteamKit2`, `protobuf-net`, etc.) and gradle plugins always go through human review. NDK / SDK / build-tools versions in `android/config.gradle` are Renovate-ignored — bumping them requires a full APK re-verification that Renovate cannot do on its own.
 
 ## Reporting issues
 

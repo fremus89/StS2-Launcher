@@ -2,6 +2,27 @@
 
 All notable changes to StS2-Launcher are recorded here. The project follows semantic versioning loosely while pre-1.0.
 
+## 0.4.0
+
+### Automation
+
+- **Self-hosted runner for full APK builds.** New `.github/workflows/apk-build.yml` runs on every push to `main`, every `v*.*.*` tag, and on manual `workflow_dispatch`. It symlinks proprietary artifacts (`sts2.dll`, custom Godot fork, FMOD, signing keystore) from a runner-local `/opt/sts2/` tree into the workspace, runs `scripts/doctor.sh` and `scripts/build.sh --no-bump`, uploads the signed APK with a SHA-256 checksum, and cleans up the scoped `~/.gradle/gradle.properties` on exit. Runner setup — system user, toolchains, directory layout, signing-secret rotation — documented end-to-end in [`docs/self-hosted-runner.md`](docs/self-hosted-runner.md).
+- **Tag-triggered GitHub Release drafting.** New `.github/workflows/release.yml` on `v*.*.*` tags verifies the tag matches `android/gradle.properties`, extracts the matching `## X.Y.Z` section from `CHANGELOG.md`, polls for the corresponding `apk-build` run to finish, then creates a **draft** release with the APK + checksum attached for manual publish.
+- **Renovate with scoped auto-merge.** New `renovate.json` opens dependency PRs weekly (Monday mornings UTC). Patch + minor bumps for `xunit`, `xunit.runner.visualstudio`, `Microsoft.NET.Test.Sdk`, and GitHub Actions auto-merge after CI; `SteamKit2` and other production .NET deps, gradle plugins, and the wrapper always go through human review. `android/config.gradle` (NDK / SDK / build-tools) is Renovate-ignored.
+
+### Testability
+
+- **`BeaconMessage.TryParse` extracted** from `LanMultiplayerPatcher` into `src/STS2Mobile/Patches/BeaconMessage.cs`. Pure record-struct, no socket dependency. Nine new xunit tests cover valid parse, wrong prefix, missing fields, empty hostname, non-numeric / out-of-range port, null / empty bytes, and forward-compat extra fields.
+- **`CloudSyncCoordinator.UserDataRootResolver` injection point** added so the always-on conflict backup (`BackupConflictInternal`) can be pointed at a temp dir in tests without Godot running. Production default still calls `ProjectSettings.GlobalizePath("user://")`.
+
+### Known deferrals
+
+- Full `CloudSyncCoordinator` conflict-path coverage requires splitting the class (partial-files) to isolate the many `sts2.dll` / Godot references in its Manual push / pull code from the pure conflict logic. Scoped for 0.5 so 0.4 ships the infra milestone without a speculative refactor.
+
+### Developer experience
+
+- `CONTRIBUTING.md` documents the linked-source test pattern, the release cadence, and the Renovate auto-merge policy.
+
 ## 0.3.0
 
 ### Security
