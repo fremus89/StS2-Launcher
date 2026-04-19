@@ -13,6 +13,8 @@
     <Compile Include="*.cs" />
     <Compile Include="..\STS2Mobile\Steam\SaveProgressComparer.cs"
              Link="Linked/SaveProgressComparer.cs" />
+    <Compile Include="..\STS2Mobile\Patches\BeaconMessage.cs"
+             Link="Linked/BeaconMessage.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
