@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using Godot;
 using MegaCrit.Sts2.Core.Saves;
 using MegaCrit.Sts2.Core.Saves.Managers;
 
@@ -13,6 +14,8 @@ public static class CloudSyncCoordinator
 {
     private const int MaxBackups = 50;
     private const int HistoryFileLimit = 100;
+    private const string InternalConflictSubdir = "sts2_conflict_backups";
+    private const int MaxInternalConflictsPerFile = 10;
 
     internal static bool LocalBackupEnabled;
 
@@ -31,6 +34,7 @@ public static class CloudSyncCoordinator
                 PatchHelper.Log($"[Cloud] Push: skipping {path} (identical)");
                 return;
             }
+            BackupConflictInternal(path, cloudContent, "cloud");
             BackupProgressContent(path, cloudContent, "cloud");
         }
 
@@ -53,6 +57,7 @@ public static class CloudSyncCoordinator
                 PatchHelper.Log($"[Cloud] Pull: skipping {path} (identical)");
                 return;
             }
+            BackupConflictInternal(path, localContent, "local");
             BackupProgressFile(local, path);
         }
 
@@ -80,6 +85,7 @@ public static class CloudSyncCoordinator
                 if (IsCorrupt(localContent))
                 {
                     PatchHelper.Log($"[Cloud] Sync: local {path} is corrupt, pulling from cloud");
+                    BackupConflictInternal(path, localContent, "local-corrupt");
                     BackupProgressFile(local, path);
                     var cloudTime = cloud.GetLastModifiedTime(path);
                     await local.WriteFileAsync(path, cloudContent);
@@ -98,6 +104,7 @@ public static class CloudSyncCoordinator
                 if (result == CompareResult.CloudWins)
                 {
                     PatchHelper.Log($"[Cloud] Sync: cloud wins for {path}");
+                    BackupConflictInternal(path, localContent, "local");
                     BackupProgressFile(local, path);
                     var cloudTime = cloud.GetLastModifiedTime(path);
                     await local.WriteFileAsync(path, cloudContent);
@@ -106,6 +113,7 @@ public static class CloudSyncCoordinator
                 else if (result == CompareResult.LocalWins)
                 {
                     PatchHelper.Log($"[Cloud] Sync: local wins for {path}, uploading");
+                    BackupConflictInternal(path, cloudContent, "cloud");
                     BackupProgressContent(path, cloudContent, "cloud");
                     cloud.WriteFile(path, localContent);
                 }
@@ -113,6 +121,7 @@ public static class CloudSyncCoordinator
                 {
                     // Cloud wins on equal progress or non-progress files to preserve PC as primary.
                     PatchHelper.Log($"[Cloud] Sync: contents differ for {path}, cloud wins");
+                    BackupConflictInternal(path, localContent, "local");
                     BackupProgressFile(local, path);
                     var cloudTime = cloud.GetLastModifiedTime(path);
                     await local.WriteFileAsync(path, cloudContent);
@@ -324,6 +333,52 @@ public static class CloudSyncCoordinator
         return lower.Contains("progress.save")
             || lower.Contains("current_run")
             || lower.Contains("prefs");
+    }
+
+    // Always-on backup of the losing side of a conflict into the app's private
+    // storage. Runs regardless of LocalBackupEnabled / MANAGE_EXTERNAL_STORAGE
+    // so that silent overwrites on an unconfigured device still leave a
+    // recovery trail. Ring-buffered per filename to bound disk usage.
+    internal static void BackupConflictInternal(string path, string content, string source)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(content) || string.IsNullOrEmpty(path))
+                return;
+
+            var userRoot = ProjectSettings.GlobalizePath("user://");
+            if (string.IsNullOrEmpty(userRoot))
+                return;
+
+            var dir = Path.Combine(userRoot, InternalConflictSubdir);
+            Directory.CreateDirectory(dir);
+
+            var canonPath = path.Replace("user://", "").Replace("\\", "/");
+            var safeName = string.Concat(
+                Path.GetFileName(canonPath)
+                    .Select(c => char.IsLetterOrDigit(c) || c == '.' || c == '_' || c == '-' ? c : '_')
+            );
+            if (safeName.Length == 0)
+                safeName = "save";
+
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var backupPath = Path.Combine(dir, $"{safeName}.{timestamp}.{source}.bak");
+            File.WriteAllText(backupPath, content);
+
+            // Trim ring: keep the most recent N entries for this filename.
+            var survivors = new DirectoryInfo(dir)
+                .GetFiles(safeName + ".*.bak")
+                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .Skip(MaxInternalConflictsPerFile);
+            foreach (var old in survivors)
+            {
+                try { old.Delete(); } catch { /* best-effort */ }
+            }
+        }
+        catch (Exception ex)
+        {
+            PatchHelper.Log($"[Cloud] Internal conflict backup failed for {path}: {ex.Message}");
+        }
     }
 
     public static void BackupSaveContent(string path, string content, string source)

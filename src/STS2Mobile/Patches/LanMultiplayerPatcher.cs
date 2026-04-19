@@ -593,11 +593,9 @@ public static class LanMultiplayerPatcher
             try
             {
                 _udpClient = new UdpClient();
-                _udpClient.Client.SetSocketOption(
-                    SocketOptionLevel.Socket,
-                    SocketOptionName.ReuseAddress,
-                    true
-                );
+                // Intentionally not setting SO_REUSEADDR: we want a conflicting bind
+                // on the discovery port to fail rather than silently share the port
+                // with another app on the device (beacon hijack avoidance).
                 _udpClient.Client.Bind(new IPEndPoint(IPAddress.Any, BeaconPort));
                 _udpClient.EnableBroadcast = true;
             }

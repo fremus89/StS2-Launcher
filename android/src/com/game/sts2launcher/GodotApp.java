@@ -25,7 +25,12 @@ import java.util.List;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
+import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.GCMParameterSpec;
+
+import android.os.Build;
+import android.security.keystore.KeyInfo;
+import android.security.keystore.StrongBoxUnavailableException;
 
 import android.content.Context;
 import android.net.wifi.WifiManager;
@@ -307,26 +312,81 @@ public class GodotApp extends GodotActivity {
 		Runtime.getRuntime().exit(0);
 	}
 
-	// AES-256-GCM encryption via Android Keystore (hardware-backed TEE).
+	// AES-256-GCM encryption via Android Keystore. Requests StrongBox-backed
+	// storage when the device supports it (API 28+), falls back to the default
+	// TEE otherwise, and logs the realized security level so the user-visible
+	// "hardware-backed" claim is verifiable.
 	private SecretKey getOrCreateKeystoreKey() throws Exception {
 		KeyStore keyStore = KeyStore.getInstance("AndroidKeyStore");
 		keyStore.load(null);
 
 		if (keyStore.containsAlias(KEYSTORE_ALIAS)) {
-			return ((KeyStore.SecretKeyEntry) keyStore.getEntry(KEYSTORE_ALIAS, null)).getSecretKey();
+			SecretKey existing = ((KeyStore.SecretKeyEntry) keyStore.getEntry(KEYSTORE_ALIAS, null)).getSecretKey();
+			logKeyBacking(existing);
+			return existing;
 		}
 
+		SecretKey fresh = null;
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+			try {
+				fresh = generateKey(/* strongBox= */ true);
+				Log.i(TAG, "Keystore: key generated with StrongBox requested");
+			} catch (StrongBoxUnavailableException e) {
+				Log.w(TAG, "Keystore: StrongBox unavailable on this device, falling back to TEE");
+			}
+		}
+		if (fresh == null) {
+			fresh = generateKey(/* strongBox= */ false);
+		}
+		logKeyBacking(fresh);
+		return fresh;
+	}
+
+	private SecretKey generateKey(boolean strongBox) throws Exception {
 		KeyGenerator keyGen = KeyGenerator.getInstance(
 				android.security.keystore.KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
-		keyGen.init(new android.security.keystore.KeyGenParameterSpec.Builder(
+		android.security.keystore.KeyGenParameterSpec.Builder builder = new android.security.keystore.KeyGenParameterSpec.Builder(
 				KEYSTORE_ALIAS,
 				android.security.keystore.KeyProperties.PURPOSE_ENCRYPT
 						| android.security.keystore.KeyProperties.PURPOSE_DECRYPT)
 				.setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)
 				.setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE)
-				.setKeySize(256)
-				.build());
+				.setKeySize(256);
+		if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+			builder.setIsStrongBoxBacked(true);
+		}
+		keyGen.init(builder.build());
 		return keyGen.generateKey();
+	}
+
+	// Reports whether the realized key lives in secure hardware. Runs once per
+	// key retrieval so the log reflects the actual state on the running device,
+	// not the README's aspirational claim.
+	private void logKeyBacking(SecretKey key) {
+		try {
+			SecretKeyFactory factory = SecretKeyFactory.getInstance(key.getAlgorithm(), "AndroidKeyStore");
+			KeyInfo info = (KeyInfo) factory.getKeySpec(key, KeyInfo.class);
+			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+				int level = info.getSecurityLevel();
+				Log.i(TAG, "Keystore: key security level=" + securityLevelName(level));
+			} else {
+				Log.i(TAG, "Keystore: key insideSecureHardware=" + info.isInsideSecureHardware());
+			}
+		} catch (Exception e) {
+			Log.w(TAG, "Keystore: could not inspect key backing: " + e.getMessage());
+		}
+	}
+
+	private static String securityLevelName(int level) {
+		// Values from android.security.keystore.KeyProperties (API 31+):
+		// SECURITY_LEVEL_SOFTWARE = 0, _TRUSTED_ENVIRONMENT = 1, _STRONGBOX = 2.
+		// Inlined so class verification never resolves the symbols on API < 31.
+		switch (level) {
+			case 0: return "SOFTWARE";
+			case 1: return "TEE";
+			case 2: return "STRONGBOX";
+			default: return "UNKNOWN(" + level + ")";
+		}
 	}
 
 	public String encryptString(String plaintext) {
