@@ -36,6 +36,28 @@ jobs:
       - name: Check formatting
         run: csharpier check src/STS2Mobile
 
+  tests:
+    name: unit tests (pure C#)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve .NET TFM from csproj
+        id: tfm
+        run: |
+          TFM=$(grep -oE "<TargetFramework>[^<]+</TargetFramework>" \
+                src/STS2Mobile/STS2Mobile.csproj \
+                | sed -E 's#</?TargetFramework>##g' | head -1)
+          MAJOR=$(printf '%s' "$TFM" | sed -E 's/^net([0-9]+).*/\1/')
+          echo "major=$MAJOR" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ steps.tfm.outputs.major }}.0.x
+
+      - name: dotnet test
+        run: dotnet test src/STS2Mobile.Tests/STS2Mobile.Tests.csproj --configuration Release --logger "console;verbosity=normal"
+
   shellcheck:
     name: shellcheck + bash -n
     runs-on: ubuntu-latest

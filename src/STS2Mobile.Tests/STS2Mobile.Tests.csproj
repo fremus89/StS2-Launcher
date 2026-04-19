@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <!-- Disable automatic file discovery; we explicitly link the sources we
+         want to cover so the test project does not pull in references to
+         the proprietary sts2.dll, GodotSharp.dll, or 0Harmony.dll. -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <RootNamespace>STS2Mobile.Tests</RootNamespace>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="*.cs" />
+    <Compile Include="..\STS2Mobile\Steam\SaveProgressComparer.cs"
+             Link="Linked/SaveProgressComparer.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+</Project>
