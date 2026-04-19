@@ -16,6 +16,8 @@ if [ -z "${ANDROID_NDK_ROOT:-}" ]; then
         echo "ERROR: no NDKs installed at $ANDROID_HOME/ndk (set ANDROID_NDK_ROOT to override)" >&2
         exit 1
     fi
+    # NDK version directories are semver-clean; ls is fine here.
+    # shellcheck disable=SC2012
     LATEST_NDK=$(ls -1 "$ANDROID_HOME/ndk" | sort -V | tail -1)
     export ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/$LATEST_NDK"
 fi

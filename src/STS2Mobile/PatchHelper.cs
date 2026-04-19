@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
 
@@ -7,6 +8,9 @@ namespace STS2Mobile;
 // Shared utilities for applying Harmony patches with consistent error handling and logging.
 public static class PatchHelper
 {
+    private const int LogBufferSize = 200;
+    private static readonly Queue<string> _logBuffer = new(LogBufferSize);
+    private static readonly object _logLock = new();
     private const BindingFlags AllFlags =
         BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
 
@@ -103,6 +107,23 @@ public static class PatchHelper
     public static void Log(string msg)
     {
         Console.Error.WriteLine($"[STS2Mobile] {msg}");
+        lock (_logLock)
+        {
+            if (_logBuffer.Count >= LogBufferSize)
+                _logBuffer.Dequeue();
+            _logBuffer.Enqueue(msg);
+        }
         LogEmitted?.Invoke(msg);
+    }
+
+    // Snapshot of log messages emitted before the caller subscribed. Used by the
+    // launcher UI to render patch failures and cloud-sync status that fired
+    // during bootstrap, before the log panel existed.
+    public static IReadOnlyList<string> ReplayBufferedLogs()
+    {
+        lock (_logLock)
+        {
+            return _logBuffer.ToArray();
+        }
     }
 }

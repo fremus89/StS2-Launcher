@@ -1,0 +1,124 @@
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write   # create release + upload assets
+  actions: read     # read the apk-build run artifacts
+
+jobs:
+  draft:
+    name: Draft GitHub Release from tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@v4
+
+      - name: Verify tag matches android/gradle.properties version
+        id: version
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          PROP=$(grep '^export_version_name=' android/gradle.properties | cut -d= -f2)
+          if [ "$TAG" != "$PROP" ]; then
+            echo "ERROR: tag is v$TAG but android/gradle.properties says $PROP" >&2
+            echo "Bump the file on main before tagging, or tag the correct commit." >&2
+            exit 1
+          fi
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Extract CHANGELOG section for this version
+        id: changelog
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          if [ ! -f CHANGELOG.md ]; then
+            echo "ERROR: CHANGELOG.md missing" >&2
+            exit 1
+          fi
+          # Pull lines from "## <version>" up to the next "## " heading (exclusive)
+          # or to EOF. awk is easier to reason about than sed here.
+          BODY=$(awk -v ver="$VERSION" '
+            $0 ~ "^## " ver "( |$)" { in_section=1; next }
+            in_section && /^## / { exit }
+            in_section { print }
+          ' CHANGELOG.md)
+          if [ -z "$BODY" ]; then
+            echo "ERROR: no '## $VERSION' section found in CHANGELOG.md" >&2
+            exit 1
+          fi
+          # Trim leading / trailing blank lines.
+          BODY=$(printf '%s\n' "$BODY" | awk 'NF{found=1} found{print}' | awk '
+            {lines[NR]=$0}
+            END {
+              for (i=NR; i>=1 && lines[i] ~ /^[[:space:]]*$/; i--) delete lines[i]
+              for (i=1; i<=NR; i++) if (i in lines) print lines[i]
+            }')
+          {
+            echo "body<<__EOF__"
+            printf '%s\n' "$BODY"
+            echo "__EOF__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Wait for apk-build workflow to finish on this tag
+        id: apk_run
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = context.ref;           // refs/tags/v0.x.y
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const deadline = Date.now() + 35 * 60 * 1000; // 35 min
+            const wait = ms => new Promise(r => setTimeout(r, ms));
+
+            while (Date.now() < deadline) {
+              const runs = await github.rest.actions.listWorkflowRuns({
+                owner, repo,
+                workflow_id: 'apk-build.yml',
+                event: 'push',
+                per_page: 30,
+              });
+              const match = runs.data.workflow_runs.find(r =>
+                r.head_branch === tag.replace('refs/tags/', '') ||
+                (r.head_sha === context.sha)
+              );
+              if (match) {
+                core.info(`Found apk-build run #${match.id} status=${match.status} conclusion=${match.conclusion}`);
+                if (match.status === 'completed') {
+                  if (match.conclusion === 'success') {
+                    core.setOutput('run_id', String(match.id));
+                    return;
+                  }
+                  core.setFailed(`apk-build run #${match.id} concluded '${match.conclusion}'.`);
+                  return;
+                }
+              } else {
+                core.info('No apk-build run matched yet, waiting...');
+              }
+              await wait(30000);
+            }
+            core.setFailed('Timed out waiting for apk-build to complete (35 min).');
+
+      - name: Download APK artifact from apk-build run
+        if: steps.apk_run.outputs.run_id
+        uses: actions/download-artifact@v4
+        with:
+          name: sts2-launcher-apk
+          run-id: ${{ steps.apk_run.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: release-assets
+
+      - name: Create draft release and attach APK
+        if: steps.apk_run.outputs.run_id
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: ${{ steps.changelog.outputs.body }}
+          files: |
+            release-assets/*.apk
+            release-assets/*.sha256
+          fail_on_unmatched_files: true

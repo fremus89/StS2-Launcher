@@ -1,0 +1,113 @@
+name: apk-build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+# One build per ref; a rapid burst of merges cancels the in-flight build
+# rather than queueing wasteful runs.
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build signed APK
+    runs-on: [self-hosted, linux, sts2]
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 0
+
+      - name: Symlink proprietary artifacts from runner disk
+        run: |
+          set -euo pipefail
+          ln -sfn /opt/sts2/upstream                upstream
+          ln -sfn /opt/sts2/vendor                  vendor
+          mkdir -p android/libs
+          ln -sfn /opt/sts2/android/libs/release    android/libs/release
+          ln -sfn /opt/sts2/keystore/sts2.keystore  android/sts2.keystore
+          echo "Symlinked layout:"
+          ls -la upstream vendor android/libs android/sts2.keystore
+
+      - name: Stage signing credentials in scoped gradle.properties
+        env:
+          SIGNING_KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+          SIGNING_KEYSTORE_ALIAS: ${{ secrets.SIGNING_KEYSTORE_ALIAS }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.gradle"
+          umask 077
+          {
+            echo "release_keystore_password=$SIGNING_KEYSTORE_PASSWORD"
+            echo "release_keystore_alias=$SIGNING_KEYSTORE_ALIAS"
+          } > "$HOME/.gradle/gradle.properties"
+          echo "wrote $HOME/.gradle/gradle.properties (alias hidden, password hidden)"
+
+      - name: Preflight (scripts/doctor.sh)
+        run: bash scripts/doctor.sh
+
+      - name: Build APK
+        run: bash scripts/build.sh --no-bump
+
+      - name: Locate APK
+        id: apk
+        run: |
+          set -euo pipefail
+          APK=$(find android/build/outputs/apk/mono/release -name "StS2Launcher-v*.apk" | head -1)
+          if [ -z "$APK" ] || [ ! -f "$APK" ]; then
+            echo "ERROR: no APK produced at expected path" >&2
+            ls -la android/build/outputs/apk/mono/release/ || true
+            exit 1
+          fi
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+          NAME=$(basename "$APK")
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          SHA=$(sha256sum "$APK" | awk '{print $1}')
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "APK: $APK"
+          echo "SHA-256: $SHA"
+
+      - name: Publish SHA-256 to step summary
+        run: |
+          {
+            echo "## APK"
+            echo ""
+            echo "**Name:** \`${{ steps.apk.outputs.name }}\`"
+            echo ""
+            echo "**SHA-256:** \`${{ steps.apk.outputs.sha256 }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Write checksum file
+        run: |
+          echo "${{ steps.apk.outputs.sha256 }}  ${{ steps.apk.outputs.name }}" \
+            > "${{ steps.apk.outputs.path }}.sha256"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sts2-launcher-apk
+          path: |
+            ${{ steps.apk.outputs.path }}
+            ${{ steps.apk.outputs.path }}.sha256
+          retention-days: ${{ startsWith(github.ref, 'refs/tags/') && 90 || 30 }}
+          if-no-files-found: error
+
+      - name: Upload debug logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-logs-${{ github.run_id }}
+          path: android/build/outputs/logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Remove scoped gradle.properties
+        if: always()
+        run: rm -f "$HOME/.gradle/gradle.properties"

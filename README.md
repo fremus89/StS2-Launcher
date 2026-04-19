@@ -19,7 +19,7 @@ An Android launcher for Slay the Spire 2, built on a custom Godot 4.5.1 engine w
 - **Shader warmup**  
   Vulkan pipeline cache persistence and canvas ubershader support to eliminate first-encounter stutters.
 - **Credential security**  
-  Steam refresh tokens encrypted at rest via Android Keystore (AES-256-GCM, hardware-backed TEE).
+  Steam refresh tokens encrypted at rest via Android Keystore (AES-256-GCM). StrongBox is requested on API 28+ devices, with a safe fallback to the default TEE and then software storage; the realized backing is logged at startup so the claim is verifiable.
 
 ## How It Works
 
