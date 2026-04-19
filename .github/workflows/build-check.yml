@@ -1,0 +1,91 @@
+name: build-check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A full APK build cannot run here because it depends on artifacts that
+# cannot be redistributed (sts2.dll, custom Godot fork, FMOD). What we *can*
+# do in CI: format check, shell lint, native stubs build.
+
+jobs:
+  csharpier:
+    name: csharpier --check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve .NET TFM from csproj
+        id: tfm
+        run: |
+          TFM=$(grep -oE "<TargetFramework>[^<]+</TargetFramework>" \
+                src/STS2Mobile/STS2Mobile.csproj \
+                | sed -E 's#</?TargetFramework>##g' | head -1)
+          MAJOR=$(printf '%s' "$TFM" | sed -E 's/^net([0-9]+).*/\1/')
+          echo "major=$MAJOR" >> "$GITHUB_OUTPUT"
+          echo "Using .NET ${MAJOR}.x for $TFM"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ steps.tfm.outputs.major }}.0.x
+
+      - name: Install csharpier
+        run: dotnet tool install -g csharpier
+
+      - name: Check formatting
+        run: csharpier check src/STS2Mobile
+
+  shellcheck:
+    name: shellcheck + bash -n
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: bash -n syntax check
+        run: |
+          set -e
+          for f in scripts/*.sh src/stubs/*.sh; do
+            echo "syntax: $f"
+            bash -n "$f"
+          done
+
+      - name: shellcheck
+        run: shellcheck scripts/*.sh src/stubs/*.sh
+
+  native-stubs:
+    name: native stubs (arm64-v8a)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve NDK version from android/config.gradle
+        id: ndk
+        run: |
+          NDK_VERSION=$(grep -oE "ndkVersion[[:space:]]*:[[:space:]]*'[0-9.]+'" \
+                        android/config.gradle \
+                        | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)
+          if [ -z "$NDK_VERSION" ]; then
+            echo "ERROR: could not parse ndkVersion from android/config.gradle" >&2
+            exit 1
+          fi
+          echo "version=$NDK_VERSION" >> "$GITHUB_OUTPUT"
+          echo "NDK version: $NDK_VERSION"
+
+      - name: Install NDK ${{ steps.ndk.outputs.version }}
+        run: |
+          yes | sdkmanager --install "ndk;${{ steps.ndk.outputs.version }}" >/dev/null
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/ndk/"
+
+      - name: Build native stubs
+        run: bash src/stubs/build_stubs.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-stubs-arm64-v8a
+          path: src/stubs/out/arm64-v8a/
+          if-no-files-found: error

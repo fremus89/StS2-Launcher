@@ -16,6 +16,16 @@ ANDROID_DIR="$ROOT/android"
 CONFIG_GRADLE="$ANDROID_DIR/config.gradle"
 CSPROJ="$ROOT/src/STS2Mobile/STS2Mobile.csproj"
 
+# Single source of truth: parse the .NET target version (e.g. "net9.0") from
+# the patcher csproj instead of hardcoding it here.
+DOTNET_TFM=""
+DOTNET_MAJOR=""
+if [ -f "$CSPROJ" ]; then
+    DOTNET_TFM=$(grep -oE "<TargetFramework>[^<]+</TargetFramework>" "$CSPROJ" \
+                 | sed -E 's#</?TargetFramework>##g' | head -1)
+    DOTNET_MAJOR=$(printf '%s\n' "$DOTNET_TFM" | sed -E 's/^net([0-9]+).*/\1/')
+fi
+
 FAILED=0
 WARNINGS=0
 PASSED=0
@@ -53,18 +63,28 @@ echo "root: $ROOT"
 # ---------------------------------------------------------------------------
 _section "Host toolchain"
 
+if [ -z "$DOTNET_MAJOR" ] || ! [ "$DOTNET_MAJOR" -eq "$DOTNET_MAJOR" ] 2>/dev/null; then
+    _fail "could not parse <TargetFramework> from $CSPROJ" "check that the csproj is well-formed"
+    DOTNET_MAJOR=9
+fi
+
 if command -v dotnet >/dev/null 2>&1; then
     DOTNET_VER=$(dotnet --version 2>/dev/null || echo "unknown")
-    case "$DOTNET_VER" in
-        9.*) _pass ".NET SDK $DOTNET_VER" ;;
-        *)   _fail ".NET SDK $DOTNET_VER (need 9.x)" "install .NET 9 SDK from https://dotnet.microsoft.com/download" ;;
-    esac
+    DOTNET_VER_MAJOR=$(printf '%s\n' "$DOTNET_VER" | cut -d. -f1)
+    if [ "${DOTNET_VER_MAJOR:-0}" = "$DOTNET_MAJOR" ]; then
+        _pass ".NET SDK $DOTNET_VER (matches $DOTNET_TFM)"
+    else
+        _fail ".NET SDK $DOTNET_VER (need ${DOTNET_MAJOR}.x for $DOTNET_TFM)" \
+              "install .NET ${DOTNET_MAJOR} SDK from https://dotnet.microsoft.com/download"
+    fi
 else
-    _fail ".NET SDK not found on PATH" "install .NET 9 SDK from https://dotnet.microsoft.com/download"
+    _fail ".NET SDK not found on PATH" \
+          "install .NET ${DOTNET_MAJOR} SDK (target: $DOTNET_TFM) from https://dotnet.microsoft.com/download"
 fi
 
 if command -v csharpier >/dev/null 2>&1; then
-    export CSHARPIER_BIN="$(command -v csharpier)"
+    CSHARPIER_BIN=$(command -v csharpier)
+    export CSHARPIER_BIN
     _pass "csharpier ($CSHARPIER_BIN)"
 elif [ -x "$HOME/.dotnet/tools/csharpier" ]; then
     export CSHARPIER_BIN="$HOME/.dotnet/tools/csharpier"
@@ -163,6 +183,8 @@ fi
 
 MONO_PKG_DIR="$NUGET_ROOT/microsoft.netcore.app.runtime.mono.android-arm64"
 if [ -d "$MONO_PKG_DIR" ]; then
+    # NuGet version directories are semver-clean (e.g. "9.0.7"); ls is fine here.
+    # shellcheck disable=SC2012
     LATEST_MONO=$(ls -1 "$MONO_PKG_DIR" 2>/dev/null | sort -V | tail -1)
     if [ -n "$LATEST_MONO" ]; then
         CANDIDATE="$MONO_PKG_DIR/$LATEST_MONO/runtimes/android-arm64/native/libSystem.Security.Cryptography.Native.Android.so"
