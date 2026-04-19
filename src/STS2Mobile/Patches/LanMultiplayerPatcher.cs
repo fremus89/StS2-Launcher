@@ -19,7 +19,6 @@ public static class LanMultiplayerPatcher
 {
     private const int BeaconPort = 33770;
     private const int GamePort = 33771;
-    private const string BeaconPrefix = "STS2LAN";
 
     private static FieldInfo _buttonContainerField;
     private static FieldInfo _loadingOverlayField;
@@ -530,7 +529,7 @@ public static class LanMultiplayerPatcher
         private void SendLoop()
         {
             var endpoint = new IPEndPoint(IPAddress.Broadcast, BeaconPort);
-            var message = $"{BeaconPrefix}|{GetDeviceHostname()}|{GamePort}";
+            var message = $"{BeaconMessage.Prefix}|{GetDeviceHostname()}|{GamePort}";
             var data = Encoding.UTF8.GetBytes(message);
 
             while (_running)
@@ -627,23 +626,16 @@ public static class LanMultiplayerPatcher
                 try
                 {
                     var data = _udpClient.Receive(ref ep);
-                    var msg = Encoding.UTF8.GetString(data);
-                    var parts = msg.Split('|');
-                    if (parts.Length >= 3 && parts[0] == BeaconPrefix)
+                    if (!BeaconMessage.TryParse(data, out var beacon))
+                        continue;
+
+                    var ip = ep.Address.ToString();
+                    if (_localIps.Contains(ip))
+                        continue;
+
+                    lock (_lock)
                     {
-                        var ip = ep.Address.ToString();
-
-                        if (_localIps.Contains(ip))
-                            continue;
-
-                        var hostname = parts[1];
-                        if (int.TryParse(parts[2], out int port))
-                        {
-                            lock (_lock)
-                            {
-                                _hosts[ip] = (hostname, port, DateTime.UtcNow);
-                            }
-                        }
+                        _hosts[ip] = (beacon.Hostname, beacon.Port, DateTime.UtcNow);
                     }
                 }
                 catch (SocketException) when (!_running)

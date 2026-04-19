@@ -19,6 +19,11 @@ public static class CloudSyncCoordinator
 
     internal static bool LocalBackupEnabled;
 
+    // Resolver for the user-data root. Swap out in tests to point at a temp
+    // dir so conflict-backup behavior can be exercised without Godot running.
+    internal static Func<string> UserDataRootResolver { get; set; } =
+        () => ProjectSettings.GlobalizePath("user://");
+
     public static async Task PushFileAsync(ISaveStore local, ICloudSaveStore cloud, string path)
     {
         if (!local.FileExists(path))
@@ -346,7 +351,7 @@ public static class CloudSyncCoordinator
             if (string.IsNullOrEmpty(content) || string.IsNullOrEmpty(path))
                 return;
 
-            var userRoot = ProjectSettings.GlobalizePath("user://");
+            var userRoot = UserDataRootResolver();
             if (string.IsNullOrEmpty(userRoot))
                 return;
 
