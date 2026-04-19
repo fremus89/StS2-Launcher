@@ -57,19 +57,42 @@ scripts/                   # Build and tooling scripts
 
 ## Prerequisites
 
-- .NET 9 SDK
-- Android SDK + NDK (see `android/config.gradle` for versions)
-- Python 3 (for `make-bootstrap-pck.py` and SCons)
-- Original game files in `upstream/godot-export/`
-- Custom Godot engine build (see `scripts/build-godot.sh`)
-- FMOD SDK in `vendor/fmod-sdk/`
+**This is a WIP.** Some binaries cannot be redistributed and must be sourced manually before the build will succeed. Run `bash scripts/doctor.sh` at any time to see a checklist of what is missing, with a remediation hint per item.
+
+### Host toolchain
+
+- **.NET 9 SDK** (`STS2Mobile.csproj` targets `net9.0`)
+- **csharpier** (`dotnet tool install -g csharpier`)
+- **JDK 17** (matches `config.gradle` `javaVersion`)
+- **Android SDK** with `ANDROID_HOME` set
+- **Android NDK** at the exact version pinned in [`android/config.gradle`](android/config.gradle) (`ndkVersion`). Install with `sdkmanager "ndk;<version>"`.
+- **Python 3** + **SCons** (only for `scripts/build-godot.sh`; a venv at `./venv` is auto-activated if present)
+- **zip / unzip**
+
+### External artifacts (not in this repo)
+
+| Path | Source |
+| --- | --- |
+| `upstream/godot-export/.godot/mono/publish/arm64/sts2.dll` | Exported from the desktop build of *Slay the Spire 2*. Not redistributable. |
+| `upstream/godot-export/.godot/mono/publish/arm64/GodotSharp.dll` | Same export. |
+| `upstream/godot-export/.godot/mono/publish/arm64/0Harmony.dll` | The `.NET 9` build of [Harmony](https://github.com/pardeike/Harmony). |
+| `vendor/godot/` | The project's custom Godot 4.5.1 fork (source). |
+| `vendor/fmod-sdk/` | [FMOD Engine](https://www.fmod.com/download) — requires a free account; commercial license required for revenue. |
+| `android/libs/release/arm64-v8a/libgodot_android.so` + `android/libs/release/godot-lib.template_release.aar` | Produced by `scripts/build-godot.sh` once `vendor/godot/` is populated. |
+| `android/sts2.keystore` | Your release signing keystore. Generate one with `keytool -genkey -v -keystore android/sts2.keystore -keyalg RSA -keysize 2048 -validity 10000 -alias sts2`. |
+| `release_keystore_password` + `release_keystore_alias` | Set in `~/.gradle/gradle.properties` or as environment variables. |
+
+Licensing notes for the items above are in [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md). FMOD and Spine cannot be bundled here.
 
 ## Building
 
-**Note: This is a WIP. There are other binaries that are required and will fail if you just run the `./build.sh` script. Godot Engine can be found on their repo https://github.com/godotengine/godot. Harmony can be found here https://github.com/Ekyso/Harmony but the version used in StS2 Launcher is compiled using dotnet 9.0. FMOD can be found here https://www.fmod.com/. Spine can be found here https://esotericsoftware.com/. I plan to upload the custom fork of Godot Engine used and the dotnet 9.0 Harmony soon. However, Spine and FMOD will not be uploaded due to licensing restrictions. Information on licensing can be found in the [THIRD-PARTY-NOTICES.txt](https://github.com/Ekyso/StS2-Launcher/blob/main/THIRD_PARTY_LICENSES.md) of the root folder.** 
-
 ```bash
-bash scripts/build.sh
+# Verify the environment first (optional; build.sh runs this automatically):
+bash scripts/doctor.sh
+
+# Full build:
+bash scripts/build.sh            # bumps patch version
+bash scripts/build.sh --no-bump  # keep current version
 ```
 
 This runs the full pipeline:
@@ -99,9 +122,20 @@ python3 scripts/make-bootstrap-pck.py
 # Rebuild Godot engine (only if engine source changes)
 bash scripts/build-godot.sh
 
-# Rebuild native stubs (requires Android NDK)
+# Rebuild native stubs (requires Android NDK at the version pinned in android/config.gradle)
 bash src/stubs/build_stubs.sh
 ```
+
+### Troubleshooting
+
+| Symptom | Cause / fix |
+| --- | --- |
+| `scripts/doctor.sh` flags `.NET SDK not found` | Install .NET 9 SDK from https://dotnet.microsoft.com/download. |
+| `csproj` build errors about `sts2`, `GodotSharp`, or `0Harmony` unresolved | `upstream/godot-export/.godot/mono/publish/arm64/` is missing one or more DLLs. See the external artifacts table above. |
+| `libSystem.Security.Cryptography.Native.Android.so not resolved` | Run `dotnet publish -c Release` in `src/STS2Mobile` first; the NuGet cache needs the `microsoft.netcore.app.runtime.mono.android-arm64` package. |
+| `build_stubs.sh` reports `NDK compiler not found` | Install the exact NDK version pinned in `android/config.gradle` via `sdkmanager "ndk;<version>"`. |
+| `build-godot.sh` reports `vendor/godot missing` | The custom Godot 4.5.1 fork is not yet published by upstream; it must be sourced separately. |
+| Gradle signing failure on release build | `release_keystore_password` / `release_keystore_alias` not set in `~/.gradle/gradle.properties`, or `android/sts2.keystore` missing. |
 
 ## LAN Multiplayer
 
