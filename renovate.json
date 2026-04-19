@@ -1,0 +1,63 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":dependencyDashboard"
+  ],
+  "schedule": ["before 9am on monday"],
+  "timezone": "UTC",
+  "rangeStrategy": "pin",
+  "platformAutomerge": true,
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "packageRules": [
+    {
+      "description": "Auto-merge patch + minor bumps for test / CI-only dependencies",
+      "matchPackageNames": [
+        "xunit",
+        "xunit.runner.visualstudio",
+        "Microsoft.NET.Test.Sdk"
+      ],
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": true,
+      "addLabels": ["automerge", "dev-deps"]
+    },
+    {
+      "description": "Auto-merge patch + minor bumps for GitHub Actions",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": true,
+      "addLabels": ["automerge", "ci"]
+    },
+    {
+      "description": "Production .NET dependencies always go through human review",
+      "matchPackageNames": [
+        "SteamKit2",
+        "protobuf-net",
+        "protobuf-net.Core",
+        "ZstdSharp",
+        "System.IO.Hashing"
+      ],
+      "automerge": false,
+      "addLabels": ["production-deps"]
+    },
+    {
+      "description": "Gradle plugins and wrapper require manual review",
+      "matchManagers": ["gradle", "gradle-wrapper"],
+      "automerge": false,
+      "addLabels": ["gradle"]
+    },
+    {
+      "description": "Never auto-bump NDK / SDK / build tools; APK re-verification required",
+      "matchFileNames": ["android/config.gradle"],
+      "enabled": false
+    }
+  ],
+  "ignorePaths": [
+    "upstream/**",
+    "vendor/**",
+    "android/build/**"
+  ]
+}
